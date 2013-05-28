@@ -1,0 +1,220 @@
+#import "ESOmnitureMedia.h"
+
+#import "ESOmnitureMediaDelegate.h"
+
+#import "ESOmniture.h"
+
+#import "ESOmnitureMediaPlayback.h"
+#import "ESOmnitureMediaPlaybackDelegate.h"
+#import "ESOmnitureMediaTrackPoint.h"
+
+@interface ESOmnitureMediaState ()
+
+@property ( nonatomic, strong ) ESOmnitureMediaPlayback* playback;
+@property ( nonatomic, strong ) ESOmnitureMediaTrackPoint* trackPoint;
+
++(id)mediaStateWithPlayback:( ESOmnitureMediaPlayback* )playback_
+                 trackPoint:( ESOmnitureMediaTrackPoint* )track_point_;
+
+@end
+
+@interface ESOmnitureMedia ()< ESOmnitureMediaPlaybackDelegate >
+
+@property ( nonatomic, strong ) NSMutableDictionary* players;
+
+@end
+
+
+@implementation ESOmnitureMedia
+
+@synthesize trackSeconds = _track_seconds;
+@synthesize trackMilestones = _track_milestones;
+@synthesize cuePoints = _cue_points;
+@synthesize trackAtCuePoints = _track_at_cue_points;
+
+@synthesize omniture = _omniture;
+@synthesize players = _players;
+
+@synthesize delegate = _delegate;
+
+
+-(id)initWithOmniture:( ESOmniture* )omniture_
+{
+   if ( !( self = [ super init ] ) )
+      return nil;
+
+   self.players = [ NSMutableDictionary dictionary ];
+   self.omniture = omniture_;
+
+   return self;
+}
+
+-(id)init
+{
+   return [ self initWithOmniture: nil ];
+}
+
+-(void)open:( NSString* )name_
+     length:( NSTimeInterval )length_
+ playerName:( NSString* )player_name_
+{
+   ESOmnitureMediaPlayback* playback_ = [ self.players objectForKey: name_ ];
+   if ( playback_ )
+   {
+      [ playback_ close ];
+   }
+
+   ESOmnitureMediaPlayback* new_playback_ = [ ESOmnitureMediaPlayback playbackWithName: name_
+                                                                            playerName: player_name_
+                                                                                length: length_
+                                                                             cuePoints: self.cuePoints
+                                                                            milestones: self.trackMilestones
+                                                                          trackSeconds: self.trackSeconds ];
+   new_playback_.delegate = self;
+   [ self.players setObject: new_playback_ forKey: name_ ];
+}
+
+-(void)close:( NSString* )name_
+{
+   ESOmnitureMediaPlayback* playback_ = [ self.players objectForKey: name_ ];
+   [ playback_ close ];
+   [ self.players removeObjectForKey: name_ ];
+}
+
+-(void)play:( NSString* )name_
+     offset:( NSTimeInterval )offset_
+{
+   ESOmnitureMediaPlayback* playback_ = [ self.players objectForKey: name_ ];
+   [ playback_ playWithOffset: offset_ ];
+}
+
+-(void)stop:( NSString* )name_
+     offset:( NSTimeInterval )offset_
+{
+   ESOmnitureMediaPlayback* playback_ = [ self.players objectForKey: name_ ];
+   [ playback_ stopWithOffset: offset_ ];
+}
+
+#pragma mark ESOmnitureMediaPlaybackDelegate
+
+-(BOOL)shouldTrackPoint:( ESOmnitureMediaTrackPoint* )point_
+           fromPlayback:( ESOmnitureMediaPlayback* )playback_
+{
+   switch ( point_.type )
+   {
+      case ESOmnitureMediaTrackPointCuepoint:
+         return self.trackAtCuePoints;
+      case ESOmnitureMediaTrackPointMilestone:
+      case ESOmnitureMediaTrackPointSeconds:
+      case ESOmnitureMediaTrackPointOpen:
+      case ESOmnitureMediaTrackPointClose:
+         return YES;
+      case ESOmnitureMediaTrackPointMonitor:
+      case ESOmnitureMediaTrackPointPlay:
+      case ESOmnitureMediaTrackPointStop:
+      default:
+         return NO;
+   }
+
+   return NO;
+}
+
+-(ESOmnitureMediaTrackPoint*)pointForTrackFromSet:( NSSet* )track_points_
+                                         playback:( ESOmnitureMediaPlayback* )playback_
+{
+   for ( ESOmnitureMediaTrackPoint* point_ in track_points_ )
+   {
+      if ( [ self shouldTrackPoint: point_ fromPlayback: playback_ ] )
+      {
+         return point_;
+      }
+   }
+
+   return nil;
+}
+
+-(void)mediaPlayback:( ESOmnitureMediaPlayback* )playback_
+     didMoveToPoints:( NSSet* )track_points_
+{
+   ESOmnitureMediaTrackPoint* track_point_ = [ self pointForTrackFromSet: track_points_ playback: playback_ ];
+   if ( track_point_ )
+   {
+      [ playback_ trackInOmniture: self.omniture ];
+   }
+
+   for ( ESOmnitureMediaTrackPoint* point_ in track_points_ )
+   {
+      ESOmnitureMediaState* media_state_ = [ ESOmnitureMediaState mediaStateWithPlayback: playback_ trackPoint: track_point_ ];
+      [ self.delegate media: self didChangeState: media_state_ ];
+   }
+}
+
+@end
+
+
+@implementation ESOmnitureMediaState
+
+@synthesize playback = _playback;
+@synthesize trackPoint = _track_point;
+
+
+-(NSString*)name
+{
+   return self.playback.name;
+}
+
+-(NSTimeInterval)length
+{
+   return self.playback.length;
+}
+
+-(NSString*)playerName
+{
+   return self.playback.playerName;
+}
+
+-(NSString*)mediaEvent
+{
+   return self.trackPoint.stringType;
+}
+
+-(NSDate*)openTime
+{
+   return self.playback.openTime;
+}
+
+-(NSTimeInterval)offset
+{
+   return self.playback.offset;
+}
+
+-(NSString*)offsetName
+{
+   return self.trackPoint.name;
+}
+
+-(double)percent
+{
+   return fmin( 1.0, self.playback.offset / self.length ) * 100.0;//fmax( fmin( 1.0, self.playback.omnitureOffset / self.length ) * 100.0, 0.0 );
+}
+
+-(NSTimeInterval)timePlayed
+{
+   return self.playback.timePlayed;
+}
+
+-(double)milestone
+{
+   return self.trackPoint.milestone;
+}
+
++(id)mediaStateWithPlayback:( ESOmnitureMediaPlayback* )playback_
+                 trackPoint:( ESOmnitureMediaTrackPoint* )track_point_
+{
+   ESOmnitureMediaState* media_state_ = [ ESOmnitureMediaState new ];
+   media_state_.playback = playback_;
+   media_state_.trackPoint = track_point_;
+   return media_state_;
+}
+
+@end

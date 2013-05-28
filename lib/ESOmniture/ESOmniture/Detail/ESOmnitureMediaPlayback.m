@@ -1,0 +1,212 @@
+#import "ESOmnitureMediaPlayback.h"
+
+#import "ESOmnitureMediaPlaybackDelegate.h"
+
+#import "ESOmniture.h"
+
+#import "ESOmnitureMediaTrackPoint.h"
+#import "ESOmnitureMediaPlaybackInfo.h"
+#import "ESOmnitureMediaPlaybackAction.h"
+
+@interface ESOmnitureMediaPlayback ()
+
+@property ( nonatomic, strong ) NSDate* openTime;
+@property ( nonatomic, strong ) NSString* name;
+@property ( nonatomic, strong ) NSString* playerName;
+@property ( nonatomic, assign ) NSTimeInterval length;
+@property ( nonatomic, strong ) ESOmnitureMediaPlaybackInfo* trackInfo;
+@property ( nonatomic, assign ) NSTimeInterval offset;
+@property ( nonatomic, assign ) NSTimeInterval timePlayed;
+@property ( nonatomic, strong ) NSMutableArray* actions;
+@property ( nonatomic, assign ) NSTimeInterval nextPointOffset;
+@property ( nonatomic, weak ) NSTimer* currentTimer;
+
+@end
+
+
+@implementation ESOmnitureMediaPlayback
+
+@synthesize openTime = _open_time;
+@synthesize name = _name;
+@synthesize playerName = _player_name;
+@synthesize length = _length;
+@synthesize trackInfo = _track_info;
+@synthesize offset = _offset;
+@synthesize timePlayed = _time_played;
+@synthesize actions = _actions;
+@synthesize nextPointOffset = _next_point_offset;
+@synthesize currentTimer = _current_timer;
+@synthesize delegate = _delegate;
+
+-(void)dealloc
+{
+   [ _current_timer invalidate ];
+}
+
+-(id)initWithName:( NSString* )name_
+       playerName:( NSString* )player_name_
+           length:( NSTimeInterval )length_
+        trackInfo:( ESOmnitureMediaPlaybackInfo* )info_
+{
+   if ( !( self = [ super init ] ) )
+      return nil;
+
+   self.actions = [ NSMutableArray array ];
+   self.name = name_;
+   self.playerName = player_name_;
+   self.length = length_;
+   self.trackInfo = info_;
+
+   return self;
+}
+
++(id)playbackWithName:( NSString* )name_
+           playerName:( NSString* )player_name_
+               length:( NSTimeInterval )length_
+            trackInfo:( ESOmnitureMediaPlaybackInfo* )info_
+{
+   return [ [ self alloc ] initWithName: name_
+                             playerName: player_name_
+                                 length: length_
+                              trackInfo: info_ ];
+}
+
++(id)playbackWithName:( NSString* )name_
+           playerName:( NSString* )player_name_
+               length:( NSTimeInterval )length_
+            cuePoints:( NSString* )cue_points_
+           milestones:( NSString* )milestones_
+         trackSeconds:( NSTimeInterval )track_seconds_
+{
+   return [ self playbackWithName: name_
+                       playerName: player_name_
+                           length: length_
+                        trackInfo: [ ESOmnitureMediaPlaybackInfo playbackInfoWithLength: length_
+                                                                              cuePoints: cue_points_
+                                                                             milestones: milestones_
+                                                                           trackSeconds: track_seconds_ ] ];
+}
+
+-(void)invalidateCurrentTimer
+{
+   [ self.currentTimer invalidate ];
+   self.currentTimer = nil;
+}
+
+-(void)startTimerWithDelay:( NSTimeInterval )delay_
+{
+   NSAssert( self.currentTimer == nil, @"ESOmniture previous timer should be stopped" );
+
+   NSDate* fire_date_ = [ [ NSDate date ] dateByAddingTimeInterval: delay_ ];
+
+   NSTimer* timer_ = [ [ NSTimer alloc ] initWithFireDate: fire_date_
+                                                 interval: 1.0
+                                                   target: self
+                                                 selector: @selector( fireTrackPoint: )
+                                                 userInfo: nil
+                                                  repeats: YES ];
+
+   self.currentTimer = timer_;
+
+   [ [ NSRunLoop currentRunLoop ] addTimer: timer_ forMode: NSDefaultRunLoopMode ];
+}
+
+-(void)playWithOffset:( NSTimeInterval )offset_
+{
+   self.offset = offset_;
+   [ self invalidateCurrentTimer ];
+   
+   NSTimeInterval seconds_offset_ = ceil( offset_ );
+   self.nextPointOffset = seconds_offset_ == offset_
+      ? offset_ + 1.0
+      : seconds_offset_;
+
+   if ( self.nextPointOffset >= self.length )
+      return;
+
+   if ( !self.openTime )
+   {
+      self.openTime = [ NSDate date ];
+      [ self.actions addObject: [ ESOmnitureMediaPlaybackAction openActionWithOffset: offset_ ] ];
+      [ self.delegate mediaPlayback: self
+                    didMoveToPoints: [ NSSet setWithObject: [ ESOmnitureMediaTrackPoint openPoint ] ] ];
+   }
+   else
+   {
+      [ self.actions addObject: [ ESOmnitureMediaPlaybackAction playActionWithOffset: offset_ ] ];
+   }
+
+   [ self startTimerWithDelay: self.nextPointOffset - offset_ ];
+}
+
+-(void)stopWithOffset:( NSTimeInterval )offset_
+{
+   self.offset = offset_;
+   [ self invalidateCurrentTimer ];
+
+   [ self.actions addObject: [ ESOmnitureMediaPlaybackAction stopActionWithOffset: offset_ ] ];
+
+   [ self.delegate mediaPlayback: self
+                  didMoveToPoints: [ NSSet setWithObject: [ ESOmnitureMediaTrackPoint stopPoint ] ] ];
+}
+
+-(void)close
+{
+   [ self stopWithOffset: self.offset ];
+
+   [ self.delegate mediaPlayback: self
+                 didMoveToPoints: [ NSSet setWithObject: [ ESOmnitureMediaTrackPoint closePoint ] ] ];
+}
+
+-(NSString*)trackMessage
+{
+   return [ NSString stringWithFormat: @"%@--**--%d--**--%@--**--%d--**--%d--**--%@"
+           , self.name
+           , (int)self.length
+           , self.playerName
+           , (int)self.timePlayed
+           , (int)[ self.openTime timeIntervalSince1970 ]
+           , [ self.actions componentsJoinedByString: @"" ]
+           ];
+}
+
+-(void)trackInOmniture:( ESOmniture* )omniture_
+{
+   ESOmnitureMediaPlaybackAction* last_action_ = [ self.actions lastObject ];
+   ESOmnitureMediaPlaybackAction* next_action_ = nil;
+
+   if ( last_action_.type != ESOmnitureMediaActionStop )
+   {
+      next_action_ = [ ESOmnitureMediaPlaybackAction trackActionWithOffset: self.offset ];
+      [ self.actions addObject: next_action_ ];
+   }
+
+   [ omniture_ trackVideoReport: [ self trackMessage ] reportType: [ last_action_ reportType ] ];
+   self.actions = [ NSMutableArray arrayWithObjects: next_action_, nil ];
+}
+
+#pragma mark NSTimer
+
+-(void)fireTrackPoint:( NSTimer* )timer_
+{
+   if ( self.currentTimer != timer_ )
+      return;
+
+   self.timePlayed += ( self.nextPointOffset - self.offset );
+
+   self.offset = fmin( self.nextPointOffset, self.length );
+
+   if ( self.offset == self.length )
+   {
+      [ self invalidateCurrentTimer ];
+   }
+   else
+   {
+      self.nextPointOffset += 1.0;
+   }
+
+   NSSet* points_ = [ self.trackInfo trackPointsForOffset: self.offset timePlayed: self.timePlayed ];
+   [ self.delegate mediaPlayback: self didMoveToPoints: points_ ];
+}
+
+@end
